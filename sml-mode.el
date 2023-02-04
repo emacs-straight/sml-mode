@@ -1,9 +1,9 @@
 ;;; sml-mode.el --- Major mode for editing (Standard) ML  -*- lexical-binding: t; coding: utf-8 -*-
 
-;; Copyright (C) 1989-2020  Free Software Foundation, Inc.
+;; Copyright (C) 1989-2023  Free Software Foundation, Inc.
 
 ;; Maintainer: Stefan Monnier <monnier@iro.umontreal.ca>
-;; Version: 6.10
+;; Version: 6.11
 ;; Keywords: SML
 ;; Author:	Lars Bo Nielsen
 ;;		Olin Shivers
@@ -56,6 +56,7 @@
 ;; - new var sml-abbrev-skeletons to control whether to include skeletons
 ;;   in the main abbrev table.
 ;; - change parsing rule of "local"
+;; - Improve handling of comments in `sml-cm-mode'.
 
 ;;;;; Changes since 5.0:
 
@@ -1744,7 +1745,13 @@ MAINFILE is the top level file of the project."
 (define-derived-mode sml-cm-mode fundamental-mode "SML-CM"
   "Major mode for SML/NJ's Compilation Manager configuration files."
   (setq-local sml-prog-proc-descriptor sml-pp-functions)
-  (setq-local font-lock-defaults '(sml-cm-font-lock-keywords nil t nil nil)))
+  (setq-local font-lock-defaults '(sml-cm-font-lock-keywords nil t nil nil))
+  (setq-local comment-start "(* ")
+  (setq-local comment-end " *)")
+  (setq-local comment-start-skip "(\\*+\\s-*")
+  (setq-local comment-end-skip "\\s-*\\*+)")
+  ;; No need to quote nested comments markers.
+  (setq-local comment-quote-nested nil))
 
 ;;;
 ;;; ML-Lex support
