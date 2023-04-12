@@ -3,7 +3,7 @@
 ;; Copyright (C) 1989-2023  Free Software Foundation, Inc.
 
 ;; Maintainer: Stefan Monnier <monnier@iro.umontreal.ca>
-;; Version: 6.11
+;; Version: 6.12
 ;; Keywords: SML
 ;; Author:	Lars Bo Nielsen
 ;;		Olin Shivers
@@ -50,6 +50,11 @@
 ;; - indentation of a declaration after a long `datatype' can be slow.
 
 ;;;; News:
+
+;;;;; Changes since 6.11:
+
+;; - Fix indentation of continued strings.
+;; - Use `syntax-propertize' rather than `font-lock-syntactic-keywords'.
 
 ;;;;; Changes since 6.8:
 
@@ -168,12 +173,12 @@ notion of \"the end of an outline\".")
 (defvar sml-mode-map
   (let ((map (make-sparse-keymap)))
     ;; Text-formatting commands:
-    (define-key map "\C-c\C-m" 'sml-insert-form)
-    (define-key map "\M-|" 'sml-electric-pipe)
-    (define-key map "\M-\ " 'sml-electric-space)
-    (define-key map [backtab] 'sml-back-to-outer-indent)
+    (define-key map "\C-c\C-m" #'sml-insert-form)
+    (define-key map "\M-|" #'sml-electric-pipe)
+    (define-key map "\M-\ " #'sml-electric-space)
+    (define-key map [backtab] #'sml-back-to-outer-indent)
     ;; The standard binding is C-c C-z, but we add this one for compatibility.
-    (define-key map "\C-c\C-s" 'sml-prog-proc-switch-to)
+    (define-key map "\C-c\C-s" #'sml-prog-proc-switch-to)
     map)
   "The keymap used in `sml-mode'.")
 
@@ -326,7 +331,7 @@ Regexp match data 0 points to the chars."
 
 (defun sml-font-lock-symbols-keywords ()
   (when sml-font-lock-symbols
-    `((,(regexp-opt (mapcar 'car sml-font-lock-symbols-alist) t)
+    `((,(regexp-opt (mapcar #'car sml-font-lock-symbols-alist) t)
        (0 (sml-font-lock-compose-symbol))))))
 
 ;; The font lock regular expressions.
@@ -335,25 +340,25 @@ Regexp match data 0 points to the chars."
   `(;;(sml-font-comments-and-strings)
     (,(concat "\\_<\\(fun\\|and\\)\\s-+" sml-tyvarseq-re
               "\\(" sml-id-re "\\)\\s-+[^ \t\n=]")
-     (1 font-lock-keyword-face)
-     (2 font-lock-function-name-face))
+     (1 'font-lock-keyword-face)
+     (2 'font-lock-function-name-face))
     (,(concat "\\_<\\(\\(?:data\\|abs\\|with\\|eq\\)?type\\)\\s-+"
               sml-tyvarseq-re "\\(" sml-id-re "\\)")
-     (1 font-lock-keyword-face)
-     (2 font-lock-type-def-face))
+     (1 'font-lock-keyword-face)
+     (2 'font-lock-type-def-face))
     (,(concat "\\_<\\(val\\)\\s-+\\(?:" sml-id-re "\\_>\\s-*\\)?\\("
               sml-id-re "\\)\\s-*[=:]")
-     (1 font-lock-keyword-face)
-     (2 font-lock-variable-name-face))
+     (1 'font-lock-keyword-face)
+     (2 'font-lock-variable-name-face))
     (,(concat "\\_<\\(structure\\|functor\\|abstraction\\)\\s-+\\("
               sml-id-re "\\)")
-     (1 font-lock-keyword-face)
-     (2 font-lock-module-def-face))
+     (1 'font-lock-keyword-face)
+     (2 'font-lock-module-def-face))
     (,(concat "\\_<\\(signature\\)\\s-+\\(" sml-id-re "\\)")
-     (1 font-lock-keyword-face)
-     (2 font-lock-interface-def-face))
+     (1 'font-lock-keyword-face)
+     (2 'font-lock-interface-def-face))
 
-    (,sml-keywords-regexp . font-lock-keyword-face)
+    (,sml-keywords-regexp (0 'font-lock-keyword-face))
     ,@(sml-font-lock-symbols-keywords))
   "Regexps matching standard SML keywords.")
 
@@ -389,12 +394,12 @@ Regexp match data 0 points to the chars."
     st)
   "Syntax table for text-properties.")
 
-(defconst sml-font-lock-syntactic-keywords
-  `(("^\\s-*\\(\\\\\\)" (1 ',sml-syntax-prop-table))))
+(defconst sml-syntax-propertize
+  (syntax-propertize-rules
+   ("^\\s-*\\(\\\\\\)" (1 sml-syntax-prop-table))))
 
 (defconst sml-font-lock-defaults
-  '(sml-font-lock-keywords nil nil nil nil
-    (font-lock-syntactic-keywords . sml-font-lock-syntactic-keywords)))
+  '(sml-font-lock-keywords nil nil nil nil))
 
 
 ;;; Indentation with SMIE
@@ -719,6 +724,19 @@ Takes the form (DIR POS . TOKENS).")
 		  alist)))))
     alist))
 
+(defun sml-smie-indent-string-continuation ()
+  (let ((ppss (syntax-ppss)))
+    (when (and (nth 3 ppss)      ;Inside a string.
+               (eq ?\\ (char-after))
+               (save-excursion (skip-chars-backward " \t") (bolp)))
+      (save-excursion
+        (let ((start (nth 8 ppss)))
+          (forward-line -1)
+          (if (< (point) start)
+              (goto-char start)
+            (skip-chars-forward " \t"))
+          (current-column))))))
+
 ;;; Generic prog-proc interaction.
 
 (require 'comint)
@@ -726,11 +744,11 @@ Takes the form (DIR POS . TOKENS).")
 
 (defvar sml-prog-proc-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [?\C-c ?\C-l] 'sml-prog-proc-load-file)
-    (define-key map [?\C-c ?\C-c] 'sml-prog-proc-compile)
-    (define-key map [?\C-c ?\C-z] 'sml-prog-proc-switch-to)
-    (define-key map [?\C-c ?\C-r] 'sml-prog-proc-send-region)
-    (define-key map [?\C-c ?\C-b] 'sml-prog-proc-send-buffer)
+    (define-key map [?\C-c ?\C-l] #'sml-prog-proc-load-file)
+    (define-key map [?\C-c ?\C-c] #'sml-prog-proc-compile)
+    (define-key map [?\C-c ?\C-z] #'sml-prog-proc-switch-to)
+    (define-key map [?\C-c ?\C-r] #'sml-prog-proc-send-region)
+    (define-key map [?\C-c ?\C-b] #'sml-prog-proc-send-buffer)
     ;; FIXME: Add
     ;; (define-key map [?\M-C-x] 'sml-prog-proc-send-defun)
     ;; (define-key map [?\C-x ?\C-e] 'sml-prog-proc-send-last-sexp)
@@ -871,7 +889,7 @@ AND-GO if non-nil indicate to additionally switch to the process's buffer."
 
 (defvar sml-prog-proc-comint-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "\C-c\C-l" 'sml-prog-proc-load-file)
+    (define-key map "\C-c\C-l" #'sml-prog-proc-load-file)
     map))
 
 (define-derived-mode sml-prog-proc-comint-mode comint-mode "Sml-Prog-Proc-Comint"
@@ -996,7 +1014,8 @@ Prefix arg AND-GO also means to switch to the read-eval-loop buffer afterwards."
   "Commands used by default by `sml-sml-prog-proc-compile'.
 Each command is associated with its \"main\" file.
 It is perfectly OK to associate several files with a command or several
-commands with the same file.")
+commands with the same file."
+  :type '(alist string string))
 
 ;; FIXME: Try to auto-detect the process and set those vars accordingly.
 
@@ -1093,7 +1112,7 @@ See `compilation-error-regexp-alist' for a description of the format.")
      sml-host-name)))
 
 ;;;###autoload
-(defalias 'run-sml 'sml-run)
+(defalias 'run-sml #'sml-run)
 
 ;;;###autoload
 (defun sml-run (cmd arg &optional host)
@@ -1128,7 +1147,7 @@ on which to run CMD using `remote-shell-program'.
                            ;; first look relative to the current directory.
                            ;; Emacs-21 does it for us, but not Emacs-20.
                            (cons default-directory exec-path) exec-path)))
-        (pop-to-buffer (apply 'make-comint pname cmd file args)))
+        (pop-to-buffer (apply #'make-comint pname cmd file args)))
 
       (inferior-sml-mode)
       (goto-char (point-max))
@@ -1146,8 +1165,8 @@ With a prefix argument AND-GO switch to the repl buffer as well."
 (defvar inferior-sml-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map comint-mode-map)
-    (define-key map "\C-c\C-s" 'sml-run)
-    (define-key map "\t" 'completion-at-point)
+    (define-key map "\C-c\C-s" #'sml-run)
+    (define-key map "\t" #'completion-at-point)
     map)
   "Keymap for inferior-sml mode.")
 
@@ -1199,8 +1218,12 @@ With a prefix argument AND-GO switch to the repl buffer as well."
                    b1 t)
               (setq e1 (match-beginning 0))
               (setq b2 (match-end 0))
-              (smerge-refine-subst b1 e1 b2 e2
-                                   '((face . smerge-refined-change))))))))))
+              (funcall
+               (if (fboundp 'smerge-refine-regions) ;Emacs≥26
+                   #'smerge-refine-regions
+                 'smerge-refine-subst)
+               b1 e1 b2 e2
+               '((face . smerge-refined-change))))))))))
 
 (define-derived-mode inferior-sml-mode sml-prog-proc-comint-mode "Inferior-SML"
   "Major mode for interacting with an inferior SML process.
@@ -1250,7 +1273,7 @@ TAB file name completion, as in shell-mode, etc.."
   (sml-mode-variables)
 
   ;; We have to install it globally, 'cause it's run in the *source* buffer :-(
-  (add-hook 'next-error-hook 'inferior-sml-next-error-hook)
+  (add-hook 'next-error-hook #'inferior-sml-next-error-hook)
 
   ;; Make TAB add a " rather than a space at the end of a file name.
   (setq-local comint-completion-addsuffix '("/" . "\""))
@@ -1302,6 +1325,7 @@ See also (info \"(sml-mode)Top\")."
   (setq-local electric-indent-chars
               (cons ?\; (if (boundp 'electric-indent-chars)
                             electric-indent-chars '(?\n))))
+  (setq-local syntax-propertize-function sml-syntax-propertize)
   (setq-local electric-layout-rules
               `((?\; . ,(lambda ()
                           (save-excursion
@@ -1322,6 +1346,7 @@ See also (info \"(sml-mode)Top\")."
   (smie-setup sml-smie-grammar #'sml-smie-rules
               :backward-token #'sml-smie-backward-token
               :forward-token #'sml-smie-forward-token)
+  (add-hook 'smie-indent-functions #'sml-smie-indent-string-continuation nil t)
   (setq-local parse-sexp-ignore-comments t)
   (setq-local comment-start "(* ")
   (setq-local comment-end " *)")
@@ -1590,11 +1615,11 @@ the corresponding form is inserted."
 (defun sml-insert-form (name newline)
   "Interactive short-cut to insert the NAME common SML form.
 If a prefix argument is given insert a NEWLINE and indent first, or
-just move to the proper indentation if the line is blank\; otherwise
+just move to the proper indentation if the line is blank; otherwise
 insert at point (which forces indentation to current column).
 
 The default form to insert is whatever you inserted last time
-\(just hit return when prompted\)\; otherwise the command reads with
+\(just hit return when prompted); otherwise the command reads with
 completion from `sml-forms-alist'."
   (interactive
    (list (completing-read
@@ -1856,7 +1881,7 @@ If nil, align it with previous cases."
 ;;;###autoload
 (define-derived-mode sml-yacc-mode sml-mode "SML-Yacc"
   "Major Mode for editing ML-Yacc files."
-  (setq-local indent-line-function 'sml-yacc-indent-line)
+  (setq-local indent-line-function #'sml-yacc-indent-line)
   (setq-local font-lock-defaults sml-yacc-font-lock-defaults))
 
 
